@@ -9,96 +9,32 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      ANDROID_HOME: /usr/local/lib/android/sdk
-      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up JDK 8
+      - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '8'
+          java-version: '17'
 
       - name: Grant execute permission for gradlew
         run: chmod +x ./gradlew
 
-      # jcenter 已关停，换成阿里云 jcenter 镜像
-      - name: Replace jcenter with aliyun mirror
+      - name: Fetch legacy jcenter AARs into libs/
         run: |
-          MIRROR="maven { url 'https://maven.aliyun.com/repository/jcenter' }"
-          grep -rl "jcenter()" --include="*.gradle" . 2>/dev/null | while read -r f; do
-            echo "fixing $f"
-            sed -i "s|jcenter()|$MIRROR|g" "$f"
-          done
-          echo "--- 替换结果 ---"
-          grep -rn "jcenter\|aliyun" --include="*.gradle" . || true
-
-      # 旧 AGP 解析不了 30+ 的 package.xml
-      - name: Prune too-new SDK packages for old AGP
-        run: |
-          SDK="$ANDROID_HOME"
-          for sub in platforms build-tools system-images add-ons sources ndk; do
-            [ -d "$SDK/$sub" ] || continue
-            for d in "$SDK/$sub"/*; do
-              [ -e "$d" ] || continue
-              v=$(basename "$d")
-              v=${v#android-}
-              major=$(echo "$v" | cut -d. -f1 | cut -dx -f1 | cut -d- -f1)
-              if [ -n "$major" ] && [ "$major" -ge 30 ] 2>/dev/null; then
-                echo "Removing $d"
-                rm -rf "$d"
-              fi
-            done
-          done
-          echo "--- platforms ---"; ls "$SDK/platforms" || true
-          echo "--- build-tools ---"; ls "$SDK/build-tools" || true
-
-      # 确保 AGP 3.6 需要的 platform/build-tools 存在
-      - name: Ensure required SDK components
-        run: |
-          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          yes | "$SDKM" --licenses > /dev/null 2>&1 || true
-          need() {
-            local pkg="$1" dir="$2"
-            if [ ! -d "$dir" ]; then
-              echo "Installing $pkg"
-              yes | "$SDKM" "$pkg" > /dev/null
-            else
-              echo "Already have $pkg"
-            fi
-          }
-          need "platforms;android-29"  "$ANDROID_HOME/platforms/android-29"
-          need "build-tools;29.0.3"    "$ANDROID_HOME/build-tools/29.0.3"
+          mkdir -p app/libs
+          base="https://maven.aliyun.com/repository/jcenter"
+          curl -fL -o app/libs/progressview-1.0.1.aar \
+            "$base/com/white/progressview/1.0.1/progressview-1.0.1.aar"
+          curl -fL -o app/libs/preference-v7-28.0.0.0.aar \
+            "$base/com/takisoft/fix/preference-v7/28.0.0.0/preference-v7-28.0.0.0.aar"
+          ls -l app/libs
 
       - name: Build Release APK
         run: ./gradlew assembleRelease --no-daemon --stacktrace
-
-      - name: Sign unsigned APK with debug key (if needed)
-        run: |
-          UNSIGNED=$(find . -path "*/build/outputs/apk/release/*-unsigned.apk" | head -1)
-          if [ -z "$UNSIGNED" ]; then
-            echo "没有未签名 APK，跳过补签"
-            exit 0
-          fi
-          echo "找到未签名 APK: $UNSIGNED"
-          DEBUG_KS="$HOME/.android/debug.keystore"
-          mkdir -p "$HOME/.android"
-          if [ ! -f "$DEBUG_KS" ]; then
-            keytool -genkeypair -v -keystore "$DEBUG_KS" \
-              -storepass android -keypass android \
-              -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
-              -dname "CN=Android Debug,O=Android,C=US"
-          fi
-          BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
-          OUT="${UNSIGNED%-unsigned.apk}.apk"
-          "$BUILD_TOOLS/apksigner" sign \
-            --ks "$DEBUG_KS" --ks-pass pass:android --key-pass pass:android \
-            --ks-key-alias androiddebugkey --out "$OUT" "$UNSIGNED"
-          echo "已签名输出: $OUT"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
