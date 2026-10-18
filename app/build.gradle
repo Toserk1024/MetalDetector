@@ -1,11 +1,13 @@
 apply plugin: 'com.android.application'
 
 android {
-    compileSdkVersion 29
+    namespace "com.yeliheng.metaldetector"   // AGP 8 必须
+    compileSdk 34
+
     defaultConfig {
         applicationId "com.yeliheng.metaldetector"
-        minSdkVersion 14
-        targetSdkVersion 29
+        minSdk 21                            // AGP 8 支持 14，但 21 更稳
+        targetSdk 29
         versionCode 6
         versionName "1.3.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
@@ -13,20 +15,28 @@ android {
     buildTypes {
         release {
             minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
     }
 }
 
 dependencies {
-    implementation fileTree(dir: 'libs', include: ['*.jar'])
-    implementation 'androidx.appcompat:appcompat:1.0.0'
-    implementation 'androidx.constraintlayout:constraintlayout:1.1.3'
-    testImplementation 'junit:junit:4.12'
-    androidTestImplementation 'androidx.test.ext:junit:1.1.1'
-    androidTestImplementation 'androidx.test.espresso:espresso-core:3.1.0'
-    api 'com.white:progressview:1.0.1'
-    api 'com.github.lecho:hellocharts-android:v1.5.8'
-    api 'com.google.android.material:material:1.0.0'
-    api 'com.takisoft.fix:preference-v7:28.0.0.0'
+    // 关键：这里把 *.aar 也纳进来，两个 jcenter AAR 直接放 libs/
+    implementation fileTree(dir: 'libs', include: ['*.jar', '*.aar'])
+
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+    testImplementation 'junit:junit:4.13.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.1.5'
+    androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
+
+    implementation 'com.github.lecho:hellocharts-android:v1.5.8'
+    implementation 'com.google.android.material:material:1.11.0'
+
+    // 删掉这两行 —— 改用 libs/ 下的 AAR：
+    //   implementation 'com.white:progressview:1.0.1'
+    //   implementation 'com.takisoft.fix:preference-v7:28.0.0.0'
 }
