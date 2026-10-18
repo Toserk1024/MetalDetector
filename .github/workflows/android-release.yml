@@ -1,19 +1,125 @@
-- name: Fetch hellocharts AAR from jitpack (trigger build if needed)
-  run: |
-    mkdir -p app/libs
-    AAR_URL="https://jitpack.io/com/github/lecho/hellocharts-android/v1.5.8/hellocharts-android-v1.5.8.aar"
-    ok=0
-    for i in $(seq 1 40); do
-      echo "attempt $i ..."
-      if curl -fL --retry 3 -o app/libs/hellocharts-android-v1.5.8.aar "$AAR_URL"; then
-        ok=1; break
-      fi
-      # 触发/查询 jitpack 构建
-      curl -s "https://jitpack.io/api/builds/com.github.lecho/hellocharts-android/v1.5.8" >/dev/null || true
-      sleep 15
-    done
-    if [ "$ok" != "1" ]; then
-      echo "::error::jitpack 构建 hellocharts v1.5.8 失败或超时"
-      exit 1
-    fi
-    ls -l app/libs/hellocharts-android-v1.5.8.aar
+# .github/workflows/android-release.yml
+name: Android Release Build
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x ./gradlew
+
+      - name: Normalize gradle files
+        run: |
+          # jcenter 已关停，统一换成 mavenCentral
+          grep -rl "jcenter()" --include="*.gradle" . 2>/dev/null \
+            | xargs -r sed -i "s/jcenter()/mavenCentral()/g" || true
+          # 让 app 能用 support 库编译出的 AAR
+          touch gradle.properties
+          grep -q "^android.useAndroidX=true" gradle.properties || echo "android.useAndroidX=true" >> gradle.properties
+          grep -q "^android.enableJetifier=true" gradle.properties || echo "android.enableJetifier=true" >> gradle.properties
+
+      # 关键步骤：从源码构建 hellocharts AAR
+      - name: Build hellocharts AAR from source
+        run: |
+          set -e
+          git clone --depth 1 --branch v1.5.8 \
+            https://github.com/lecho/hellocharts-android.git /tmp/hc-src
+
+          # 自动找到源码模块目录（兼容不同分支命名）
+          MOD_DIR=$(find /tmp/hc-src -maxdepth 2 -type d -path "*/src/main/java" 2>/dev/null | head -1)
+          if [ -z "$MOD_DIR" ]; then
+            echo "找不到 hellocharts 的 src/main/java"; exit 1
+          fi
+          SRC_MAIN=$(dirname "$MOD_DIR")   # .../xxx/src/main
+          echo "hellocharts 源码根: $SRC_MAIN"
+
+          WORK=/tmp/hc-build
+          LIB="$WORK/hellocharts-library"
+          mkdir -p "$LIB/src/main"
+          cp -r "$SRC_MAIN/java" "$LIB/src/main/"
+          [ -d "$SRC_MAIN/res" ] && cp -r "$SRC_MAIN/res" "$LIB/src/main/"
+
+          # manifest：删掉 package 属性（AGP 8 要求 namespace 在 build.gradle）
+          if [ -f "$SRC_MAIN/AndroidManifest.xml" ]; then
+            sed 's/package="[^"]*"//' "$SRC_MAIN/AndroidManifest.xml" > "$LIB/src/main/AndroidManifest.xml"
+          else
+            echo '<manifest xmlns:android="http://schemas.android.com/apk/res/android"/>' > "$LIB/src/main/AndroidManifest.xml"
+          fi
+
+          # 临时工程的 settings.gradle
+          cat > "$WORK/settings.gradle" <<'EOF'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositories { google(); mavenCentral() }
+          }
+          include ':hellocharts-library'
+          EOF
+
+          # 根 build.gradle
+          cat > "$WORK/build.gradle" <<'EOF'
+          plugins {
+              id 'com.android.library' version '8.5.2' apply false
+          }
+          EOF
+
+          # library 模块 build.gradle（全新的，不依赖老配置）
+          cat > "$LIB/build.gradle" <<'EOF'
+          plugins { id 'com.android.library' }
+
+          android {
+              namespace 'lecho.lib.hellocharts'
+              compileSdk 34
+              defaultConfig { minSdk 14 }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_1_8
+                  targetCompatibility JavaVersion.VERSION_1_8
+              }
+              lint { abortOnError false }
+          }
+
+          dependencies {
+              implementation 'com.android.support:support-v4:28.0.0'
+              implementation 'com.android.support:appcompat-v7:28.0.0'
+          }
+          EOF
+
+          # 用主工程已经下载的 Gradle 8.7 来构建
+          cd "$WORK"
+          "$GITHUB_WORKSPACE/gradlew" :hellocharts-library:assembleRelease --no-daemon --stacktrace
+
+          mkdir -p "$GITHUB_WORKSPACE/app/libs"
+          cp "$LIB/build/outputs/aar/hellocharts-library-release.aar" \
+             "$GITHUB_WORKSPACE/app/libs/hellocharts.aar"
+          ls -l "$GITHUB_WORKSPACE/app/libs/hellocharts.aar"
+
+      # 把 app 对 hellocharts 的远程依赖替换成本地 AAR
+      - name: Point app to local hellocharts AAR
+        run: |
+          sed -i -E "s|.*com\.github\.lecho:hellocharts-android.*|implementation files('libs/hellocharts.aar')|" app/build.gradle
+          grep -n "hellocharts" app/build.gradle || true
+
+      - name: Build Release APK
+        run: ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-apk
+          path: |
+            **/build/outputs/apk/release/*.apk
+          if-no-files-found: warn
+          retention-days: 14
