@@ -26,6 +26,18 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x ./gradlew
 
+      # jcenter 已关停，换成阿里云 jcenter 镜像
+      - name: Replace jcenter with aliyun mirror
+        run: |
+          MIRROR="maven { url 'https://maven.aliyun.com/repository/jcenter' }"
+          grep -rl "jcenter()" --include="*.gradle" . 2>/dev/null | while read -r f; do
+            echo "fixing $f"
+            sed -i "s|jcenter()|$MIRROR|g" "$f"
+          done
+          echo "--- 替换结果 ---"
+          grep -rn "jcenter\|aliyun" --include="*.gradle" . || true
+
+      # 旧 AGP 解析不了 30+ 的 package.xml
       - name: Prune too-new SDK packages for old AGP
         run: |
           SDK="$ANDROID_HOME"
@@ -42,8 +54,25 @@ jobs:
               fi
             done
           done
-          ls "$SDK/platforms" || true
-          ls "$SDK/build-tools" || true
+          echo "--- platforms ---"; ls "$SDK/platforms" || true
+          echo "--- build-tools ---"; ls "$SDK/build-tools" || true
+
+      # 确保 AGP 3.6 需要的 platform/build-tools 存在
+      - name: Ensure required SDK components
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses > /dev/null 2>&1 || true
+          need() {
+            local pkg="$1" dir="$2"
+            if [ ! -d "$dir" ]; then
+              echo "Installing $pkg"
+              yes | "$SDKM" "$pkg" > /dev/null
+            else
+              echo "Already have $pkg"
+            fi
+          }
+          need "platforms;android-29"  "$ANDROID_HOME/platforms/android-29"
+          need "build-tools;29.0.3"    "$ANDROID_HOME/build-tools/29.0.3"
 
       - name: Build Release APK
         run: ./gradlew assembleRelease --no-daemon --stacktrace
