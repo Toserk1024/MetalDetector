@@ -9,27 +9,33 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      # 直接用 runner 预装的 Android SDK
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 老项目如果编译不过，可以把 17 改成 11 或 8
+      # 老项目编译不过就把 17 改成 11 或 8
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Grant execute permission for gradlew
         run: chmod +x ./gradlew
+
+      # 兜底接受许可证（预装 SDK 一般已接受，这步基本是空跑）
+      - name: Accept Android SDK licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
 
       - name: Build Release APK
         run: ./gradlew assembleRelease --no-daemon --stacktrace
 
-      # 如果产出的是 *-unsigned.apk，用 debug keystore 补签，保证可安装
+      # 若产物是 *-unsigned.apk，用 debug keystore 补签，保证可安装
       - name: Sign unsigned APK with debug key (if needed)
         run: |
           UNSIGNED=$(find . -path "*/build/outputs/apk/release/*-unsigned.apk" | head -1)
